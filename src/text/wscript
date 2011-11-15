@@ -23,7 +23,7 @@ def build(bld):
     source = 'json_test.cpp',
     target = 'json_test',
     includes = '. json',
-    use = 'pficommon_text')
+    use = 'pficommon_text MSGPACK')
   
   bld.program(
     features = 'gtest',

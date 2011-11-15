@@ -708,3 +708,44 @@ TEST(json, escape_ctrl)
   os2<<j;
   EXPECT_EQ("\"\\u0003\"", os2.str());
 }
+
+TEST(json, msgpack_serialization)
+{
+  istringstream iss(
+    "   {\n"
+    "\"Image\": {\n"
+    "\"Width\":  800,\n"
+    "\"Height\": 600,\n"
+    "\"Title\":  \"View from 15th Floor\",\n"
+    "\"Thumbnail\": {\n"
+    "\"Url\":    \"http://www.example.com/image/481989943\",\n"
+    "\"Height\": 125,\n"
+    "\"Width\":  \"100\"\n"
+    "},\n"
+    "\"IDs\": [116, 943, 234, 38793]\n"
+    "}\n"
+    "}"
+    );
+
+  json j1; iss>>j1;
+
+  example1 v1;
+  from_json(j1, v1);
+
+  msgpack::sbuffer buffer;
+  msgpack::packer<msgpack::sbuffer> pk(buffer);
+  j1.msgpack_pack(pk);
+
+  msgpack::unpacker up;
+  up.reserve_buffer(buffer.size());
+  memcpy(up.buffer(), buffer.data(), buffer.size());
+  up.buffer_consumed(buffer.size());
+
+  msgpack::unpacked data;
+  ASSERT_TRUE(up.next(&data));
+  json j2;
+  j2.msgpack_unpack(data.get());
+  example1 v2;
+  from_json(j2, v2);
+  EXPECT_TRUE(v1==v2);
+}

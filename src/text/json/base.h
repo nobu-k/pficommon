@@ -40,6 +40,8 @@
 #include "../../lang/shared_ptr.h"
 #include "../../data/string/ustring.h"
 
+#include <msgpack.hpp>
+
 namespace pfi{
 namespace text{
 namespace json{
@@ -79,6 +81,17 @@ public:
   void pretty(std::ostream &os, bool escape) const;
 
   static const bool is_read = false;
+
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const;
+  void msgpack_unpack(const msgpack::object &o) {
+    val.reset(inner_unpack(o));
+  }
+
+private:
+  template<typename T, typename Packer>
+  bool inner_pack(Packer &pk) const;
+  json_value *inner_unpack(const msgpack::object &o);
 
 private:
   pfi::lang::shared_ptr<json_value> val;
@@ -139,6 +152,14 @@ public:
     os<<']';
   }
 
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack_array(dat.size());
+    for (size_t i=0; i<dat.size(); i++){
+      dat[i].msgpack_pack(pk);
+    }
+  }
+
 private:
   std::vector<json> dat;
 };
@@ -156,6 +177,11 @@ public:
     os<<dat;
   }
 
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack(dat);
+  }
+
 private:
   int64_t dat;
 };
@@ -171,6 +197,11 @@ public:
     os<<std::setprecision(12)
       <<dat
       <<std::setprecision(prec);
+  }
+
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack(dat);
   }
 
 private:
@@ -203,6 +234,12 @@ public:
       }
     }
     os<<'\"';
+  }
+
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack_raw(dat.size());
+    pk.pack_raw_body(dat.c_str(), dat.size());
   }
 
 private:
@@ -334,6 +371,16 @@ public:
     os<<'}';
   }
 
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack_map(member.size());
+    for (const_iterator it = member.begin(), end = member.end(); it != end; ++it){
+      pk.pack_raw(it->first.size());
+      pk.pack_raw_body(it->first.c_str(), it->first.size());
+      it->second.msgpack_pack(pk);
+    }
+  }
+
 private:
   std::map<std::string, json> member;
 };
@@ -348,6 +395,11 @@ public:
     os<<(dat?"true":"false");
   }
 
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack(dat);
+  }
+
 private:
   bool dat;
 };
@@ -358,6 +410,11 @@ public:
 
   void print(std::ostream &os, bool escape) const {
     os<<"null";
+  }
+
+  template<typename Packer>
+  void msgpack_pack(Packer &pk) const {
+    pk.pack_nil();
   }
 };
 
@@ -520,6 +577,66 @@ inline std::ostream &operator<<(std::ostream &os, const without_escape_tag<T> &j
 {
   gen_print(os, j, false, true);
   return os;
+}
+
+template<typename Packer>
+void json::msgpack_pack(Packer &pk) const {
+  inner_pack<json_bool>(pk) ||
+  inner_pack<json_integer>(pk) ||
+  inner_pack<json_float>(pk) ||
+  inner_pack<json_array>(pk) ||
+  inner_pack<json_string>(pk) ||
+  inner_pack<json_object>(pk) ||
+  inner_pack<json_null>(pk);
+}
+
+template<typename T, typename Packer>
+inline bool json::inner_pack(Packer &pk) const {
+  if (!is<T>(*this)) return false;
+  static_cast<const T*>(get())->msgpack_pack(pk);
+  return true;
+}
+
+inline json_value *json::inner_unpack(const msgpack::object &o) {
+  switch (o.type){
+  case msgpack::type::NIL: return new json_null();
+  case msgpack::type::BOOLEAN: return new json_bool(o.via.boolean);
+  case msgpack::type::POSITIVE_INTEGER: return new json_integer(o.via.i64);
+  case msgpack::type::NEGATIVE_INTEGER: return new json_integer(o.via.u64);
+  case msgpack::type::DOUBLE: return new json_float(o.via.dec);
+  case msgpack::type::RAW: return new json_string(std::string(o.via.raw.ptr, o.via.raw.size));
+  case msgpack::type::ARRAY: {
+    json_array *array=new json_array();
+    try{
+      for (size_t i=0; i<o.via.array.size; i++){
+        array->add(json(inner_unpack(o.via.array.ptr[i])));
+      }
+      return array;
+    }
+    catch(...){
+      delete array;
+      throw;
+    }
+  }
+  case msgpack::type::MAP: {
+    json_object *obj=new json_object();
+    try{
+      for (size_t i=0; i<o.via.map.size; i++){
+        const msgpack::object_kv &kv=o.via.map.ptr[i];
+        if (kv.key.type!=msgpack::type::RAW) continue; // FIXME: currently, key must be a string value
+        obj->add(std::string(kv.key.via.raw.ptr, kv.key.via.raw.size),
+                 json(inner_unpack(kv.val)));
+      }
+      return obj;
+    }
+    catch(...){
+      delete obj;
+      throw;
+    }
+  }
+  default:
+    return new json_null(); // FIXME: should throw an exception?
+  }
 }
 
 } // json
